@@ -1,0 +1,3 @@
+api/openapi.yaml
+.travis.yml
+git_push.sh

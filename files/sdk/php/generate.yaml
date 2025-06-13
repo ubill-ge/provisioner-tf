@@ -1,0 +1,77 @@
+name: Generate SDK
+
+on:
+  workflow_dispatch:
+    inputs:
+      trigger-commit-hash:
+        description: 'The commit SHA that triggered the generation action'
+        required: true
+      trigger-commit-message:
+        description: 'The commit message associated with the triggering commit'
+        required: true
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    env:
+      SDK: php
+      SDK_PATH: '${{ github.workspace }}/sdk'
+      PHP_VERSION: 8.3
+    steps:
+      - name: Get GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Get GitHub App User ID
+        id: user-id
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: echo "id=$(gh api "/users/${{ steps.app-token.outputs.app-slug }}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          path: ${{ env.SDK_PATH }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+
+      - name: Install File Post-processor
+        run: |
+          curl -sSL https://github.com/PHP-CS-Fixer/PHP-CS-Fixer/releases/download/v3.75.0/php-cs-fixer.phar -o /usr/local/bin/php-cs-fixer
+          chmod +x /usr/local/bin/php-cs-fixer
+
+      - name: Generate SDK
+        id: generate
+        uses: ubill-ge/sdk-generator/.github/actions/generator@main
+        env:
+          PHP_POST_PROCESS_FILE: 'php-cs-fixer fix --allow-risky=yes'
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          sdk: ${{ env.SDK }}
+          output-path: ${{ env.SDK_PATH }}
+
+      - name: File Post-processor (manually)
+        working-directory: ${{ env.SDK_PATH }}
+        run: php-cs-fixer fix --allow-risky=yes
+
+      - name: Create PR
+        uses: ubill-ge/sdk-generator/.github/actions/pr-creator@main
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          sdk: ${{ env.SDK }}
+          sdk-version: ${{ steps.generate.outputs.sdk-version }}
+          sdk-path: ${{ env.SDK_PATH }}
+          committer: '${{ steps.app-token.outputs.app-slug }}[bot] <${{ steps.user-id.outputs.id }}+${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com>'
+          trigger-commit-hash: '${{ inputs.trigger-commit-hash }}'
+          trigger-commit-message: '${{ inputs.trigger-commit-message }}'

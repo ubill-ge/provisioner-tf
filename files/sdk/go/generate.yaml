@@ -1,0 +1,73 @@
+name: Generate SDK
+
+on:
+  workflow_dispatch:
+    inputs:
+      trigger-commit-hash:
+        description: 'The commit SHA that triggered the generation action'
+        required: true
+      trigger-commit-message:
+        description: 'The commit message associated with the triggering commit'
+        required: true
+
+jobs:
+  generate:
+    runs-on: ubuntu-24.04
+    env:
+      SDK: go
+      SDK_PATH: '${{ github.workspace }}/sdk'
+    steps:
+      - name: Get GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.CI_APP_ID }}
+          private-key: ${{ secrets.CI_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Get GitHub App User ID
+        id: user-id
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: echo "id=$(gh api "/users/${{ steps.app-token.outputs.app-slug }}[bot]" --jq .id)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          path: ${{ env.SDK_PATH }}
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: '${{ env.SDK_PATH }}/go.mod'
+          cache-dependency-path: '${{ env.SDK_PATH }}/go.sum'
+
+      - name: Generate SDK
+        id: generate
+        uses: ubill-ge/sdk-generator/.github/actions/generator@main
+        env:
+          GO_POST_PROCESS_FILE: 'gofmt -w'
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          sdk: ${{ env.SDK }}
+          sdk-version-key: 'packageVersion'
+          output-path: ${{ env.SDK_PATH }}
+
+      - name: File Post-processor (manually)
+        working-directory: ${{ env.SDK_PATH }}
+        run: go mod tidy
+
+      - name: Create PR
+        uses: ubill-ge/sdk-generator/.github/actions/pr-creator@main
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          sdk: ${{ env.SDK }}
+          sdk-version: ${{ steps.generate.outputs.sdk-version }}
+          sdk-path: ${{ env.SDK_PATH }}
+          committer: '${{ steps.app-token.outputs.app-slug }}[bot] <${{ steps.user-id.outputs.id }}+${{ steps.app-token.outputs.app-slug }}[bot]@users.noreply.github.com>'
+          trigger-commit-hash: '${{ inputs.trigger-commit-hash }}'
+          trigger-commit-message: '${{ inputs.trigger-commit-message }}'
